@@ -149,8 +149,8 @@
         <p class="hint">${it.envs.length > 1
           ? 'Boards with several environments usually differ in chip size or bootloader. If unsure, start with the default.'
           : 'This board has a single environment.'}</p>
-        <div class="warn"><b>Development firmware.</b> bugfix-2.1.x changes daily and is not release-tested.
-          Check the configuration matches your printer before flashing. Flash at your own risk.</div>
+        <div class="warn"><b>Latest code.</b> bugfix-2.1.x has all the latest fixes and is often more stable than the last release,
+          but it changes daily and a recent change can introduce a new bug. Check the configuration matches your printer before flashing.</div>
         <a class="btn" id="go" target="_blank" rel="noopener">Request build on GitHub</a>`;
       const sync = () => { $('go').href = issueUrl(it, $('env').value); };
       $('env').addEventListener('change', sync);

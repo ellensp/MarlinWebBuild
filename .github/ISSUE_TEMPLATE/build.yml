@@ -25,5 +25,5 @@ body:
     attributes:
       label: Acknowledgement
       options:
-        - label: I understand bugfix-2.1.x is untested development firmware and I flash it at my own risk.
+        - label: I understand bugfix-2.1.x is updated daily, so it has the latest fixes but may also contain recently introduced bugs.
           required: true

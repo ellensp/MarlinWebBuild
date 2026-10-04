@@ -10,7 +10,7 @@ with nothing to install.
 2. Click **Request build on GitHub** and submit the pre-filled issue.
 3. A few minutes later the issue gets a reply with a download link.
 
-Downloads are kept for about two weeks. `bugfix-2.1.x` is development firmware, so flash at your own risk.
+Downloads are kept for about two weeks. `bugfix-2.1.x` has the latest fixes and is often more stable than the last release, but it changes daily and recent changes can introduce new bugs.
 
 ## How it works
 

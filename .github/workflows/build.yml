@@ -182,7 +182,9 @@ jobs:
           (some boards only accept a specific file name). The config/ folder
           holds the configuration files this firmware was built from.
 
-          bugfix-2.1.x is development firmware. Flash at your own risk.
+          bugfix-2.1.x has the latest fixes, but recent changes can introduce
+          new bugs. If you find one, please report it to the Marlin project
+          with the details in this file.
           EOF
           (cd out && zip -r "../build-$KEY.zip" .)
 
@@ -248,7 +250,7 @@ jobs:
               echo "Copy the firmware file to the SD card **without renaming it**."
               [[ -n $OTHERS ]] && echo && echo "If this doesn't boot on your board, try another environment: $OTHERS"
               echo
-              echo "> bugfix-2.1.x is development firmware. Flash at your own risk. This download expires after about two weeks."
+              echo "> bugfix-2.1.x has the latest fixes, but recent changes can introduce new bugs. This download expires after about two weeks."
             } > reply.md
             gh issue comment "$ISSUE" --body-file reply.md
             gh issue close "$ISSUE" --reason completed
