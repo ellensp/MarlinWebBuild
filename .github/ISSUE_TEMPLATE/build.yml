@@ -1,0 +1,29 @@
+name: Firmware build request
+description: Build Marlin bugfix-2.1.x firmware from an example configuration
+title: "Build: "
+labels: [build-request]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The easiest way to fill this in is from the [configuration picker](https://ellensp.github.io/MarlinWebBuild/).
+        A bot will reply here with a download link in a few minutes.
+  - type: input
+    id: config
+    attributes:
+      label: Configuration
+      description: Folder under `config/examples` in MarlinFirmware/Configurations, e.g. `Creality/Ender-3/CrealityV422`
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Build environment
+      description: PlatformIO environment. Leave blank to use the board's default.
+  - type: checkboxes
+    id: ack
+    attributes:
+      label: Acknowledgement
+      options:
+        - label: I understand bugfix-2.1.x is untested development firmware and I flash it at my own risk.
+          required: true

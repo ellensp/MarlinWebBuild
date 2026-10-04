@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marlin Firmware Builder</title>
+<meta name="description" content="Build Marlin bugfix-2.1.x firmware from an example configuration, on demand.">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5d6676;
+    --border: #d9dde4; --accent: #0b6bcb; --accent-text: #ffffff;
+    --hover: #eef3fa; --sel: #dceafa; --warn-bg: #fff6df; --warn-border: #e8c46a;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b1f27; --text: #e4e7ec; --muted: #98a1b0;
+      --border: #2e3440; --accent: #4c9be8; --accent-text: #0b1220;
+      --hover: #232a35; --sel: #1f3550; --warn-bg: #2d2615; --warn-border: #7a6224;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  .lede { color: var(--muted); margin: 0 0 20px; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
+  @media (max-width: 760px) { .grid { grid-template-columns: minmax(0, 1fr); } }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+  label { display: block; font-weight: 600; margin-bottom: 6px; }
+  input, select {
+    width: 100%; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 8px; padding: 9px 11px;
+  }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .count { color: var(--muted); font-size: .875rem; margin: 8px 0; }
+  ul.results { list-style: none; margin: 0; padding: 0; max-height: 60vh; overflow-y: auto; border-top: 1px solid var(--border); }
+  ul.results li { border-bottom: 1px solid var(--border); }
+  ul.results button {
+    all: unset; display: block; width: 100%; padding: 8px 10px; cursor: pointer; box-sizing: border-box;
+  }
+  ul.results button:hover { background: var(--hover); }
+  ul.results button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  ul.results button[aria-current="true"] { background: var(--sel); }
+  .path { overflow-wrap: anywhere; }
+  .board { color: var(--muted); font-size: .8rem; font-family: var(--mono); }
+  .empty { color: var(--muted); padding: 24px 4px; }
+  h2 { font-size: 1.15rem; margin: 0 0 4px; overflow-wrap: anywhere; }
+  dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 12px; margin: 12px 0 16px; font-size: .9rem; }
+  dt { color: var(--muted); }
+  dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+  .hint { color: var(--muted); font-size: .85rem; margin: 6px 0 0; }
+  .warn {
+    background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px;
+    padding: 10px 12px; font-size: .9rem; margin: 16px 0;
+  }
+  .btn {
+    display: inline-block; background: var(--accent); color: var(--accent-text); text-decoration: none;
+    font-weight: 600; padding: 10px 18px; border-radius: 8px;
+  }
+  .btn[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+  a { color: var(--accent); }
+  ol { padding-left: 20px; margin: 8px 0 0; }
+  footer { color: var(--muted); font-size: .8rem; margin-top: 24px; overflow-wrap: anywhere; }
+  footer code { font-family: var(--mono); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Marlin Firmware Builder</h1>
+  <p class="lede">Pick your printer's example configuration and get Marlin <span id="branch">bugfix-2.1.x</span> firmware built for it.</p>
+
+  <div class="grid">
+    <section class="panel" aria-labelledby="find-label">
+      <label id="find-label" for="q">Find your printer</label>
+      <input id="q" type="search" placeholder="e.g. ender 3 v422, skr mini, prusa" autocomplete="off" disabled>
+      <div class="count" id="count" aria-live="polite">Loading configurations…</div>
+      <ul class="results" id="results"></ul>
+    </section>
+
+    <section class="panel" id="detail" aria-live="polite">
+      <h2>How it works</h2>
+      <ol>
+        <li>Search for your printer and select its configuration.</li>
+        <li>Choose a build environment (the default suits most boards).</li>
+        <li>Click <b>Request build</b>. GitHub opens a pre-filled request. Submit it.</li>
+        <li>A few minutes later a download link is posted on that request, and GitHub emails you.</li>
+      </ol>
+      <p class="hint">You need a free GitHub account to submit a request.</p>
+    </section>
+  </div>
+
+  <footer id="footer"></footer>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const MAX_SHOWN = 300;
+  let data = null, selected = null;
+
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const norm = s => s.toLowerCase().replace(/[-_/.()]+/g, ' ');
+
+  function render() {
+    const words = norm($('q').value).split(/\s+/).filter(Boolean);
+    const hits = data.items.filter(it => words.every(w => it._hay.includes(w)));
+    $('count').textContent = hits.length === data.items.length
+      ? `${hits.length} configurations`
+      : `${hits.length} of ${data.items.length} configurations` + (hits.length > MAX_SHOWN ? ` (first ${MAX_SHOWN} shown)` : '');
+    const ul = $('results');
+    ul.innerHTML = hits.length ? '' : '<li class="empty">No matching configuration.</li>';
+    for (const it of hits.slice(0, MAX_SHOWN)) {
+      const li = document.createElement('li');
+      li.innerHTML = `<button type="button"${it === selected ? ' aria-current="true"' : ''}>
+        <div class="path">${esc(it.path)}</div><div class="board">${esc(it.board || 'no MOTHERBOARD')}</div></button>`;
+      li.firstElementChild.addEventListener('click', () => select(it, true));
+      ul.appendChild(li);
+    }
+  }
+
+  function issueUrl(it, env) {
+    const p = new URLSearchParams({
+      template: 'build.yml',
+      title: `Build: ${it.path} [${env}]`,
+      config: it.path,
+      env,
+    });
+    return `https://github.com/${data.repo}/issues/new?${p}`;
+  }
+
+  function select(it, fromClick) {
+    selected = it;
+    history.replaceState(null, '', '#' + encodeURIComponent(it.path));
+    const cfgUrl = `https://github.com/MarlinFirmware/Configurations/tree/${data.branch}/config/examples/${it.path.split('/').map(encodeURIComponent).join('/')}`;
+    const d = $('detail');
+    if (!it.envs.length) {
+      d.innerHTML = `<h2>${esc(it.path)}</h2>
+        <p>This configuration's board (<code>${esc(it.board || 'none')}</code>) has no build target in Marlin ${esc(data.branch)},
+        so it can't be built right now.</p><p><a href="${cfgUrl}" target="_blank" rel="noopener">View the configuration</a></p>`;
+    } else {
+      d.innerHTML = `<h2>${esc(it.path)}</h2>
+        <dl><dt>Board</dt><dd>${esc(it.board)}</dd><dt>Source</dt><dd><a href="${cfgUrl}" target="_blank" rel="noopener">Configurations repo</a></dd></dl>
+        <label for="env">Build environment</label>
+        <select id="env">${it.envs.map((e, i) => `<option value="${esc(e)}">${esc(e)}${i === 0 ? ' (default)' : ''}</option>`).join('')}</select>
+        <p class="hint">${it.envs.length > 1
+          ? 'Boards with several environments usually differ in chip size or bootloader. If unsure, start with the default.'
+          : 'This board has a single environment.'}</p>
+        <div class="warn"><b>Development firmware.</b> bugfix-2.1.x changes daily and is not release-tested.
+          Check the configuration matches your printer before flashing. Flash at your own risk.</div>
+        <a class="btn" id="go" target="_blank" rel="noopener">Request build on GitHub</a>`;
+      const sync = () => { $('go').href = issueUrl(it, $('env').value); };
+      $('env').addEventListener('change', sync);
+      sync();
+    }
+    render();
+    if (fromClick && matchMedia('(max-width: 760px)').matches) $('detail').scrollIntoView({ behavior: 'smooth' });
+  }
+
+  fetch('index.json', { cache: 'no-cache' })
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(j => {
+      data = j;
+      for (const it of data.items) it._hay = norm(`${it.path} ${it.board || ''}`);
+      $('branch').textContent = data.branch;
+      $('footer').innerHTML = `Index built ${esc(data.generated.replace('T', ' ').replace('Z', ' UTC'))} from
+        Marlin <code><a href="https://github.com/MarlinFirmware/Marlin/commit/${esc(data.marlin)}">${esc(data.marlin.slice(0, 10))}</a></code> and
+        Configurations <code><a href="https://github.com/MarlinFirmware/Configurations/commit/${esc(data.configs)}">${esc(data.configs.slice(0, 10))}</a></code>.
+        Builds always use the latest ${esc(data.branch)}. Unofficial builder. ·
+        <a href="https://github.com/${esc(data.repo)}">Source and past builds</a>`;
+      $('q').disabled = false;
+      $('q').addEventListener('input', render);
+      const want = decodeURIComponent(location.hash.slice(1));
+      const pre = want && data.items.find(it => it.path === want);
+      if (pre) { $('q').value = pre.path; select(pre); } else render();
+      $('q').focus();
+    })
+    .catch(e => { $('count').textContent = `Couldn't load the configuration list (${e.message}).`; });
+})();
+</script>
+</body>
+</html>

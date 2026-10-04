@@ -1,0 +1,274 @@
+#
+# Build firmware for a "build-request" issue, attach it to the "builds" release,
+# reply with the download link and close the issue.
+#
+# Issue text is untrusted: it only ever reaches scripts through env vars,
+# and is validated (tools/parse_request.py + env list check) before use.
+#
+name: Build request
+
+on:
+  issues:
+    types: [opened]
+
+concurrency:
+  group: build-${{ github.event.issue.number }}
+
+env:
+  MARLIN_REPO: MarlinFirmware/Marlin
+  CONFIGS_REPO: MarlinFirmware/Configurations
+  BRANCH: bugfix-2.1.x
+  DAILY_LIMIT: 5          # Build requests per user per 24h (repo owner exempt)
+
+jobs:
+  prepare:
+    if: contains(github.event.issue.labels.*.name, 'build-request')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    outputs:
+      ok: ${{ steps.check.outputs.ok }}
+      config: ${{ steps.parse.outputs.config }}
+      env: ${{ steps.check.outputs.env }}
+      envs: ${{ steps.check.outputs.envs }}
+      marlin_sha: ${{ steps.check.outputs.marlin_sha }}
+      configs_sha: ${{ steps.check.outputs.configs_sha }}
+      key: ${{ steps.check.outputs.key }}
+      cached: ${{ steps.check.outputs.cached }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE: ${{ github.event.issue.number }}
+      AUTHOR: ${{ github.event.issue.user.login }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Parse request
+        id: parse
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: |
+          python3 tools/parse_request.py 2> err.txt || {
+            gh issue comment "$ISSUE" --body "Sorry, I couldn't read this request: $(cat err.txt)"
+            gh issue close "$ISSUE" --reason "not planned"
+            exit 1
+          }
+
+      - name: Validate and look up cache
+        id: check
+        env:
+          CONFIG: ${{ steps.parse.outputs.config }}
+          REQ_ENV: ${{ steps.parse.outputs.env }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          reject() {
+            gh issue comment "$ISSUE" --body "$1"
+            gh issue close "$ISSUE" --reason "not planned"
+            exit 1
+          }
+
+          # Rate limit
+          if [[ "$AUTHOR" != "$OWNER" ]]; then
+            SINCE=$(date -u -d '-1 day' +%Y-%m-%dT%H:%M:%SZ)
+            N=$(gh issue list --state all --label build-request --author "$AUTHOR" --search "created:>=$SINCE" --json number --jq length)
+            (( N > DAILY_LIMIT )) && reject "Sorry, there's a limit of $DAILY_LIMIT build requests per day. Please try again tomorrow."
+          fi
+
+          # Fetch just enough of both repos to validate the request
+          git clone -q --depth 1 --filter=blob:none --sparse -b "$BRANCH" "https://github.com/$MARLIN_REPO" _marlin
+          git -C _marlin sparse-checkout set Marlin/src/pins
+          git clone -q --depth 1 --filter=blob:none --sparse -b "$BRANCH" "https://github.com/$CONFIGS_REPO" _cfg
+          git -C _cfg sparse-checkout set --no-cone "/config/examples/$CONFIG/*"
+
+          ENVS=$(python3 tools/marlin_index.py envs _marlin _cfg "$CONFIG" 2>&1) \
+            || reject "Sorry, \`$CONFIG\` isn't a configuration I can build: $ENVS"
+          [[ -n $ENVS ]] || reject "Sorry, the board used by \`$CONFIG\` has no build environment in Marlin $BRANCH."
+
+          ENV=${REQ_ENV:-$(head -n1 <<<"$ENVS")}
+          grep -qx -- "$ENV" <<<"$ENVS" \
+            || reject "Sorry, \`$ENV\` isn't a valid environment for \`$CONFIG\`. Valid choices: $(echo $ENVS | sed 's/[^ ]\+/`&`/g')"
+
+          MARLIN_SHA=$(git -C _marlin rev-parse HEAD)
+          CONFIGS_SHA=$(git -C _cfg rev-parse HEAD)
+          TREE=$(git -C _cfg rev-parse "HEAD:config/examples/$CONFIG")
+          KEY=$(printf '%s\n' "$MARLIN_SHA" "$TREE" "$ENV" | sha256sum | cut -c1-16)
+
+          CACHED=false
+          gh release view builds --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "build-$KEY.zip" && CACHED=true
+
+          {
+            echo "ok=true"
+            echo "env=$ENV"
+            echo "envs=$(echo $ENVS)"
+            echo "marlin_sha=$MARLIN_SHA"
+            echo "configs_sha=$CONFIGS_SHA"
+            echo "key=$KEY"
+            echo "cached=$CACHED"
+          } >> "$GITHUB_OUTPUT"
+
+          [[ $CACHED == true ]] || gh issue comment "$ISSUE" --body "Building \`$CONFIG\` for \`$ENV\` from Marlin $BRANCH (\`${MARLIN_SHA:0:10}\`). This usually takes a few minutes. [Watch the build]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.ok == 'true' && needs.prepare.outputs.cached != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      CONFIG: ${{ needs.prepare.outputs.config }}
+      PIO_ENV: ${{ needs.prepare.outputs.env }}
+      KEY: ${{ needs.prepare.outputs.key }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.MARLIN_REPO }}
+          ref: ${{ needs.prepare.outputs.marlin_sha }}
+          path: marlin
+
+      - uses: actions/checkout@v7
+        with:
+          repository: ${{ env.CONFIGS_REPO }}
+          ref: ${{ needs.prepare.outputs.configs_sha }}
+          path: cfg
+          sparse-checkout: config/examples/${{ needs.prepare.outputs.config }}
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ needs.prepare.outputs.env }}-${{ hashFiles('marlin/platformio.ini', 'marlin/ini/*.ini') }}
+          restore-keys: |
+            pio-${{ needs.prepare.outputs.env }}-
+            pio-
+
+      - name: Install PlatformIO
+        run: pip install -U platformio
+
+      - name: Apply configuration
+        run: |
+          mkdir -p out/config
+          for f in Configuration.h Configuration_adv.h _Bootscreen.h _Statusscreen.h; do
+            src="cfg/config/examples/$CONFIG/$f"
+            [[ -f "$src" ]] && cp "$src" marlin/Marlin/ && cp "$src" out/config/
+          done
+
+      - name: Build
+        working-directory: marlin
+        run: |
+          set -o pipefail
+          pio run -e "$PIO_ENV" 2>&1 | tee ../build.log
+
+      - name: Package
+        run: |
+          shopt -s nullglob
+          files=(marlin/.pio/build/"$PIO_ENV"/*.{bin,hex,srec,uf2})
+          (( ${#files[@]} )) || { echo "No firmware files found"; ls -la "marlin/.pio/build/$PIO_ENV"; exit 1; }
+          cp "${files[@]}" out/
+          cat > out/BUILD_INFO.txt <<EOF
+          Configuration: $CONFIG
+          Environment:   $PIO_ENV
+          Marlin:        https://github.com/$MARLIN_REPO/commit/${{ needs.prepare.outputs.marlin_sha }}
+          Configurations: https://github.com/$CONFIGS_REPO/tree/${{ needs.prepare.outputs.configs_sha }}/config/examples/${CONFIG// /%20}
+          Built:         $(date -u +'%Y-%m-%d %H:%M UTC')
+
+          Copy the firmware file to the printer's SD card without renaming it
+          (some boards only accept a specific file name). The config/ folder
+          holds the configuration files this firmware was built from.
+
+          bugfix-2.1.x is development firmware. Flash at your own risk.
+          EOF
+          (cd out && zip -r "../build-$KEY.zip" .)
+
+      - uses: actions/upload-artifact@v7
+        if: success()
+        with:
+          name: firmware
+          path: build-${{ needs.prepare.outputs.key }}.zip
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: log
+          path: build.log
+          retention-days: 7
+
+  publish:
+    needs: [prepare, build]
+    if: always() && needs.prepare.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      ISSUE: ${{ github.event.issue.number }}
+      CONFIG: ${{ needs.prepare.outputs.config }}
+      PIO_ENV: ${{ needs.prepare.outputs.env }}
+      ENVS: ${{ needs.prepare.outputs.envs }}
+      KEY: ${{ needs.prepare.outputs.key }}
+      CACHED: ${{ needs.prepare.outputs.cached }}
+      BUILD_RESULT: ${{ needs.build.result }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/download-artifact@v8
+        if: needs.build.result != 'skipped'
+        continue-on-error: true
+        with:
+          merge-multiple: true
+
+      - name: Upload and reply
+        run: |
+          ASSET="build-$KEY.zip"
+          URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/builds/$ASSET"
+          OTHERS=$(for e in $ENVS; do [[ $e == "$PIO_ENV" ]] || printf '`%s` ' "$e"; done)
+
+          if [[ $CACHED == true || $BUILD_RESULT == success ]]; then
+            if [[ $CACHED != true ]]; then
+              gh release view builds >/dev/null 2>&1 || \
+                gh release create builds --prerelease --title "Firmware builds" \
+                  --notes "Firmware built on request. Files are removed after a couple of weeks."
+              gh release upload builds "$ASSET" --clobber
+            fi
+            {
+              echo "### :white_check_mark: Firmware ready"
+              echo
+              echo "**[Download $ASSET]($URL)**"
+              echo
+              echo "Configuration \`$CONFIG\`, environment \`$PIO_ENV\`."
+              echo "The zip holds the firmware file(s), the configuration used and \`BUILD_INFO.txt\`."
+              echo "Copy the firmware file to the SD card **without renaming it**."
+              [[ -n $OTHERS ]] && echo && echo "If this doesn't boot on your board, try another environment: $OTHERS"
+              echo
+              echo "> bugfix-2.1.x is development firmware. Flash at your own risk. This download expires after about two weeks."
+            } > reply.md
+            gh issue comment "$ISSUE" --body-file reply.md
+            gh issue close "$ISSUE" --reason completed
+          else
+            {
+              echo "### :x: Build failed"
+              echo
+              echo "\`$CONFIG\` did not compile for \`$PIO_ENV\` on today's bugfix-2.1.x."
+              echo "This is usually a problem in Marlin or the example configuration, not something you did."
+              echo
+              if [[ -f build.log ]]; then
+                echo '```text'
+                { grep -E '(error|Error):' build.log | head -20; echo '...'; tail -n 15 build.log; } | cut -c1-300
+                echo '```'
+              fi
+              echo
+              echo "[Full build log]($RUN_URL)"
+            } > reply.md
+            gh issue comment "$ISSUE" --body-file reply.md
+            gh label create build-failed --color B60205 --description "Firmware build failed" 2>/dev/null || true
+            gh issue edit "$ISSUE" --add-label build-failed
+            gh issue close "$ISSUE" --reason "not planned"
+          fi

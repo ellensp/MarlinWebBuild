@@ -1,0 +1,43 @@
+#
+# Remove old firmware downloads and lock old build-request issues.
+#
+name: Prune
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  RETENTION_DAYS: 14
+  GH_TOKEN: ${{ github.token }}
+  GH_REPO: ${{ github.repository }}
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete old release assets
+        run: |
+          CUTOFF=$(date -u -d "-$RETENTION_DAYS days" +%Y-%m-%dT%H:%M:%SZ)
+          gh release view builds --json assets \
+            --jq ".assets[] | select(.createdAt < \"$CUTOFF\") | .name" 2>/dev/null \
+          | while read -r a; do
+              echo "Deleting $a"
+              gh release delete-asset builds "$a" -y
+            done
+
+      - name: Lock old build requests
+        run: |
+          CUTOFF=$(date -u -d "-$RETENTION_DAYS days" +%Y-%m-%d)
+          gh issue list --state closed --label build-request --limit 500 \
+            --search "is:unlocked closed:<$CUTOFF" --json number --jq '.[].number' \
+          | while read -r n; do
+              echo "Locking #$n"
+              gh issue comment "$n" --body "This request has expired and any download link above no longer works. Please request a fresh build from the [configuration picker](https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/)."
+              gh issue lock "$n" --reason resolved
+            done
