@@ -1,12 +1,17 @@
 # Marlin Firmware Builder
 
-Build [Marlin](https://github.com/MarlinFirmware/Marlin) `bugfix-2.1.x` firmware on demand from any
-[example configuration](https://github.com/MarlinFirmware/Configurations/tree/bugfix-2.1.x/config/examples),
-with nothing to install.
+Build firmware from the [Marlin](https://github.com/MarlinFirmware/Marlin) **`bugfix-2.1.x`** branch
+for any of its [example configurations](https://github.com/MarlinFirmware/Configurations/tree/bugfix-2.1.x/config/examples),
+without installing a build environment.
+
+Only `bugfix-2.1.x` is built, always from its latest commit. Release versions of Marlin are not available here.
+
+**You need a free [GitHub account](https://github.com/signup) to request a build**, because
+each request is a GitHub issue and the download link is posted as a reply to it.
 
 **[Open the configuration picker](https://ellensp.github.io/MarlinWebBuild/)**
 
-1. Find your printer and pick a build environment.
+1. Sign in to GitHub, then find your printer and pick a build environment.
 2. Click **Request build on GitHub** and submit the pre-filled issue.
 3. A few minutes later the issue gets a reply with a download link.
 
