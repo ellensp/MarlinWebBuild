@@ -30,5 +30,5 @@ body:
     attributes:
       label: Acknowledgement
       options:
-        - label: I understand bugfix-2.1.x is updated daily, so it has the latest fixes but may also contain recently introduced bugs, and that a release doesn't have the fixes made since it came out.
+        - label: I understand this firmware is built unattended from an example configuration, and I'll check that the configuration matches my printer before flashing.
           required: true
