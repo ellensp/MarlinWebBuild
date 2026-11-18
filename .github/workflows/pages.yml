@@ -26,28 +26,36 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
-    env:
-      BRANCH: bugfix-2.1.x
     steps:
       - uses: actions/checkout@v7
 
-      - name: Build index
+      - name: Build indexes
         run: |
-          git clone -q --depth 1 --filter=blob:none --sparse -b "$BRANCH" https://github.com/MarlinFirmware/Marlin _marlin
-          git -C _marlin sparse-checkout set Marlin/src/pins
-          git clone -q --depth 1 --filter=blob:none --sparse -b "$BRANCH" https://github.com/MarlinFirmware/Configurations _cfg
-          git -C _cfg sparse-checkout set --no-cone '/config/examples/**/Configuration.h'
+          # One index per Marlin version: bugfix-2.1.x and each latest-* release
+          python3 tools/marlin_versions.py list > versions.json
+          mkdir -p site/index
+          echo '[]' > built.json
+          for i in $(seq 0 $(( $(jq length versions.json) - 1 ))); do
+            v=$(jq -c ".[$i]" versions.json)
+            ID=$(jq -r .id <<<"$v"); MREF=$(jq -r .marlin_ref <<<"$v"); CREF=$(jq -r .configs_ref <<<"$v")
+            rm -rf _marlin _cfg
+            git -c advice.detachedHead=false clone -q --depth 1 --filter=blob:none --sparse -b "$MREF" https://github.com/MarlinFirmware/Marlin _marlin
+            git -C _marlin sparse-checkout set Marlin/src/pins
+            git -c advice.detachedHead=false clone -q --depth 1 --filter=blob:none --sparse -b "$CREF" https://github.com/MarlinFirmware/Configurations _cfg
+            git -C _cfg sparse-checkout set --no-cone '/config/examples/**/Configuration.h'
 
-          python3 tools/marlin_index.py index _marlin _cfg > configs.json
-          jq -n --slurpfile c configs.json \
+            python3 tools/marlin_index.py index _marlin _cfg > "site/index/$ID.json"
+            jq --argjson v "$v" \
+              --arg marlin "$(git -C _marlin rev-parse HEAD)" \
+              --arg configs "$(git -C _cfg rev-parse HEAD)" \
+              --argjson count "$(jq length "site/index/$ID.json")" \
+              '. + [$v + {marlin:$marlin, configs:$configs, count:$count}]' built.json > built.tmp && mv built.tmp built.json
+            echo "$ID: $(jq length "site/index/$ID.json") configurations"
+          done
+          jq -n --slurpfile v built.json \
             --arg repo "$GITHUB_REPOSITORY" \
-            --arg branch "$BRANCH" \
-            --arg marlin "$(git -C _marlin rev-parse HEAD)" \
-            --arg configs "$(git -C _cfg rev-parse HEAD)" \
             --arg generated "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{repo:$repo, branch:$branch, marlin:$marlin, configs:$configs, generated:$generated, items:$c[0]}' \
-            > site/index.json
-          echo "$(jq '.items | length' site/index.json) configurations indexed"
+            '{repo:$repo, generated:$generated, versions:$v[0]}' > site/versions.json
 
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5

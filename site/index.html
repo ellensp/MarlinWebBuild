@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Marlin Firmware Builder</title>
-<meta name="description" content="Build Marlin bugfix-2.1.x firmware from an example configuration, on demand.">
+<meta name="description" content="Build Marlin firmware (bugfix-2.1.x or a release) from an example configuration, on demand.">
 <style>
   :root {
     --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5d6676;
@@ -71,11 +71,14 @@
 <body>
 <main>
   <h1>Marlin Firmware Builder</h1>
-  <p class="lede">Pick your printer's example configuration and get Marlin <span id="branch">bugfix-2.1.x</span> firmware built for it.</p>
+  <p class="lede">Pick a Marlin version and your printer's example configuration, and get firmware built for it.</p>
 
   <div class="grid">
     <section class="panel" aria-labelledby="find-label">
-      <label id="find-label" for="q">Find your printer</label>
+      <label for="ver">Marlin version</label>
+      <select id="ver" disabled></select>
+      <p class="hint" id="ver-hint"></p>
+      <label id="find-label" for="q" style="margin-top:14px">Find your printer</label>
       <input id="q" type="search" placeholder="e.g. ender 3 v422, skr mini, prusa" autocomplete="off" disabled>
       <div class="count" id="count" aria-live="polite">Loading configurations…</div>
       <ul class="results" id="results"></ul>
@@ -84,7 +87,7 @@
     <section class="panel" id="detail" aria-live="polite">
       <h2>How it works</h2>
       <ol>
-        <li>Search for your printer and select its configuration.</li>
+        <li>Choose a Marlin version, then search for your printer and select its configuration.</li>
         <li>Choose a build environment (the default suits most boards).</li>
         <li>Click <b>Request build</b>. GitHub opens a pre-filled request. Submit it.</li>
         <li>A few minutes later a download link is posted on that request, and GitHub emails you.</li>
@@ -100,17 +103,19 @@
 (() => {
   const $ = id => document.getElementById(id);
   const MAX_SHOWN = 300;
-  let data = null, selected = null;
+  let meta = null, ver = null, items = [], selected = null;
+  const cache = {};
 
   const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const norm = s => s.toLowerCase().replace(/[-_/.()]+/g, ' ');
+  const isBugfix = () => ver.kind === 'bugfix';
 
   function render() {
     const words = norm($('q').value).split(/\s+/).filter(Boolean);
-    const hits = data.items.filter(it => words.every(w => it._hay.includes(w)));
-    $('count').textContent = hits.length === data.items.length
+    const hits = items.filter(it => words.every(w => it._hay.includes(w)));
+    $('count').textContent = hits.length === items.length
       ? `${hits.length} configurations`
-      : `${hits.length} of ${data.items.length} configurations` + (hits.length > MAX_SHOWN ? ` (first ${MAX_SHOWN} shown)` : '');
+      : `${hits.length} of ${items.length} configurations` + (hits.length > MAX_SHOWN ? ` (first ${MAX_SHOWN} shown)` : '');
     const ul = $('results');
     ul.innerHTML = hits.length ? '' : '<li class="empty">No matching configuration.</li>';
     for (const it of hits.slice(0, MAX_SHOWN)) {
@@ -125,32 +130,55 @@
   function issueUrl(it, env) {
     const p = new URLSearchParams({
       template: 'build.yml',
-      title: `Build: ${it.path} [${env}]`,
+      title: `Build: ${it.path} [${env}] (${ver.id})`,
+      version: ver.id,
       config: it.path,
       env,
     });
-    return `https://github.com/${data.repo}/issues/new?${p}`;
+    return `https://github.com/${meta.repo}/issues/new?${p}`;
+  }
+
+  function setHash() {
+    const p = new URLSearchParams({ v: ver.id });
+    if (selected) p.set('c', selected.path);
+    history.replaceState(null, '', '#' + p);
+  }
+
+  function showIntro() {
+    $('detail').innerHTML = `<h2>How it works</h2>
+      <ol>
+        <li>Choose a Marlin version, then search for your printer and select its configuration.</li>
+        <li>Choose a build environment (the default suits most boards).</li>
+        <li>Click <b>Request build</b>. GitHub opens a pre-filled request. Submit it.</li>
+        <li>A few minutes later a download link is posted on that request, and GitHub emails you.</li>
+      </ol>
+      <p class="hint">You need a free GitHub account to submit a request.</p>`;
   }
 
   function select(it, fromClick) {
     selected = it;
-    history.replaceState(null, '', '#' + encodeURIComponent(it.path));
-    const cfgUrl = `https://github.com/MarlinFirmware/Configurations/tree/${data.branch}/config/examples/${it.path.split('/').map(encodeURIComponent).join('/')}`;
+    setHash();
+    const cfgUrl = `https://github.com/MarlinFirmware/Configurations/tree/${encodeURIComponent(ver.configs_ref)}/config/examples/${it.path.split('/').map(encodeURIComponent).join('/')}`;
     const d = $('detail');
     if (!it.envs.length) {
       d.innerHTML = `<h2>${esc(it.path)}</h2>
-        <p>This configuration's board (<code>${esc(it.board || 'none')}</code>) has no build target in Marlin ${esc(data.branch)},
-        so it can't be built right now.</p><p><a href="${cfgUrl}" target="_blank" rel="noopener">View the configuration</a></p>`;
+        <p>This configuration's board (<code>${esc(it.board || 'none')}</code>) has no build target in Marlin ${esc(ver.id)},
+        so it can't be built.</p><p><a href="${cfgUrl}" target="_blank" rel="noopener">View the configuration</a></p>`;
     } else {
+      const warn = isBugfix()
+        ? `<b>Latest code.</b> bugfix-2.1.x has all the latest fixes and is often more stable than the last release,
+           but it changes daily and a recent change can introduce a new bug.`
+        : `<b>Release ${esc(ver.id)}.</b> A release doesn't have the fixes made since it came out.
+           If you hit a bug, check whether it also happens with bugfix-2.1.x before reporting it.`;
       d.innerHTML = `<h2>${esc(it.path)}</h2>
-        <dl><dt>Board</dt><dd>${esc(it.board)}</dd><dt>Source</dt><dd><a href="${cfgUrl}" target="_blank" rel="noopener">Configurations repo</a></dd></dl>
+        <dl><dt>Marlin</dt><dd>${esc(ver.label)}</dd><dt>Board</dt><dd>${esc(it.board)}</dd>
+          <dt>Source</dt><dd><a href="${cfgUrl}" target="_blank" rel="noopener">Configurations repo</a></dd></dl>
         <label for="env">Build environment</label>
         <select id="env">${it.envs.map((e, i) => `<option value="${esc(e)}">${esc(e)}${i === 0 ? ' (default)' : ''}</option>`).join('')}</select>
         <p class="hint">${it.envs.length > 1
           ? 'Boards with several environments usually differ in chip size or bootloader. If unsure, start with the default.'
           : 'This board has a single environment.'}</p>
-        <div class="warn"><b>Latest code.</b> bugfix-2.1.x has all the latest fixes and is often more stable than the last release,
-          but it changes daily and a recent change can introduce a new bug. Check the configuration matches your printer before flashing.</div>
+        <div class="warn">${warn} Check the configuration matches your printer before flashing.</div>
         <a class="btn" id="go" target="_blank" rel="noopener">Request build on GitHub</a>`;
       const sync = () => { $('go').href = issueUrl(it, $('env').value); };
       $('env').addEventListener('change', sync);
@@ -160,25 +188,56 @@
     if (fromClick && matchMedia('(max-width: 760px)').matches) $('detail').scrollIntoView({ behavior: 'smooth' });
   }
 
-  fetch('index.json', { cache: 'no-cache' })
+  function footer() {
+    $('footer').innerHTML = `Index built ${esc(meta.generated.replace('T', ' ').replace('Z', ' UTC'))}.
+      Marlin ${esc(ver.id)} is <code><a href="https://github.com/MarlinFirmware/Marlin/commit/${esc(ver.marlin)}">${esc(ver.marlin.slice(0, 10))}</a></code>,
+      examples from Configurations ${esc(ver.configs_ref)} <code><a href="https://github.com/MarlinFirmware/Configurations/commit/${esc(ver.configs)}">${esc(ver.configs.slice(0, 10))}</a></code>.
+      ${isBugfix() ? 'bugfix-2.1.x builds always use its latest commit.' : ''} Unofficial builder. ·
+      <a href="https://github.com/${esc(meta.repo)}">Source and past builds</a>`;
+  }
+
+  function loadVersion(v, wantPath) {
+    ver = v;
+    $('ver').value = v.id;
+    $('ver-hint').textContent = isBugfix()
+      ? 'Latest development code, updated daily.'
+      : `Release, tagged ${v.aliases.join(', ')}.`;
+    $('q').disabled = true;
+    $('count').textContent = 'Loading configurations…';
+    const got = cache[v.id] || fetch(`index/${encodeURIComponent(v.id)}.json`, { cache: 'no-cache' })
+      .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+    cache[v.id] = got;
+    return got.then(list => {
+      if (ver !== v) return;
+      items = list;
+      for (const it of items) it._hay = it._hay || norm(`${it.path} ${it.board || ''}`);
+      footer();
+      $('q').disabled = false;
+      const keep = wantPath || (selected && selected.path);
+      const pre = keep && items.find(it => it.path === keep);
+      selected = null;
+      if (pre) { $('q').value = pre.path; select(pre); }
+      else { if (keep) $('q').value = ''; showIntro(); setHash(); render(); }
+    }).catch(e => { $('count').textContent = `Couldn't load the configuration list (${e.message}).`; });
+  }
+
+  fetch('versions.json', { cache: 'no-cache' })
     .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
     .then(j => {
-      data = j;
-      for (const it of data.items) it._hay = norm(`${it.path} ${it.board || ''}`);
-      $('branch').textContent = data.branch;
-      $('footer').innerHTML = `Index built ${esc(data.generated.replace('T', ' ').replace('Z', ' UTC'))} from
-        Marlin <code><a href="https://github.com/MarlinFirmware/Marlin/commit/${esc(data.marlin)}">${esc(data.marlin.slice(0, 10))}</a></code> and
-        Configurations <code><a href="https://github.com/MarlinFirmware/Configurations/commit/${esc(data.configs)}">${esc(data.configs.slice(0, 10))}</a></code>.
-        Builds always use the latest ${esc(data.branch)}. Unofficial builder. ·
-        <a href="https://github.com/${esc(data.repo)}">Source and past builds</a>`;
-      $('q').disabled = false;
+      meta = j;
+      $('ver').innerHTML = meta.versions.map(v => `<option value="${esc(v.id)}">${esc(v.label)}</option>`).join('');
+      $('ver').disabled = false;
+      $('ver').addEventListener('change', () => loadVersion(meta.versions.find(v => v.id === $('ver').value)));
       $('q').addEventListener('input', render);
-      const want = decodeURIComponent(location.hash.slice(1));
-      const pre = want && data.items.find(it => it.path === want);
-      if (pre) { $('q').value = pre.path; select(pre); } else render();
-      $('q').focus();
+      // #v=<version>&c=<path>, or the older #<path> for bugfix-2.1.x
+      const raw = location.hash.slice(1);
+      const hp = new URLSearchParams(raw.includes('=') ? raw : '');
+      const wantVer = hp.get('v');
+      const wantPath = raw.includes('=') ? hp.get('c') : decodeURIComponent(raw);
+      const v = meta.versions.find(x => x.id === wantVer || (x.aliases || []).includes(wantVer)) || meta.versions[0];
+      loadVersion(v, wantPath).then(() => $('q').focus());
     })
-    .catch(e => { $('count').textContent = `Couldn't load the configuration list (${e.message}).`; });
+    .catch(e => { $('count').textContent = `Couldn't load the version list (${e.message}).`; });
 })();
 </script>
 </body>

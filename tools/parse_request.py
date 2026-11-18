@@ -2,15 +2,16 @@
 """
 Parse a build-request issue body (GitHub issue form markdown) from $ISSUE_BODY.
 
-Writes config=... and env=... to $GITHUB_OUTPUT (or stdout), or exits non-zero
+Writes version=..., config=... and env=... to $GITHUB_OUTPUT (or stdout), or exits non-zero
 with a message suitable for posting back to the user.
 """
 
 import os, re, sys
 
-FIELDS = {'Configuration': 'config', 'Build environment': 'env'}
+FIELDS = {'Marlin version': 'version', 'Configuration': 'config', 'Build environment': 'env'}
 PATH_RE = re.compile(r"^[\w .,+&()'-]+(/[\w .,+&()'-]+)*$")
 ENV_RE = re.compile(r'^\w+$')
+VERSION_RE = re.compile(r'^[\w.-]+$')
 
 def parse(body):
     out, key = {}, None
@@ -29,6 +30,7 @@ def main():
     req = parse(os.environ.get('ISSUE_BODY', ''))
     config = req.get('config', '').strip('/ ').strip('`')
     env = req.get('env', '').strip('`')
+    version = req.get('version', '').strip('`') or 'bugfix-2.1.x'
     if config.startswith('config/examples/'): config = config[len('config/examples/'):]
 
     if not config:
@@ -37,10 +39,12 @@ def main():
         sys.exit(f"`{config[:200]}` is not a valid configuration path.")
     if env and (len(env) > 64 or not ENV_RE.match(env)):
         sys.exit(f"`{env[:64]}` is not a valid environment name.")
+    if len(version) > 32 or not VERSION_RE.match(version):
+        sys.exit(f"`{version[:32]}` is not a valid Marlin version.")
 
     dest = os.environ.get('GITHUB_OUTPUT')
     with open(dest, 'a') if dest else sys.stdout as f:
-        f.write(f"config={config}\nenv={env}\n")
+        f.write(f"version={version}\nconfig={config}\nenv={env}\n")
 
 if __name__ == '__main__':
     main()

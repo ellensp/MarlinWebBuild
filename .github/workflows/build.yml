@@ -17,7 +17,6 @@ concurrency:
 env:
   MARLIN_REPO: MarlinFirmware/Marlin
   CONFIGS_REPO: MarlinFirmware/Configurations
-  BRANCH: bugfix-2.1.x
   DAILY_LIMIT: 5          # Build requests per user per 24h (repo owner exempt)
 
 jobs:
@@ -30,6 +29,8 @@ jobs:
     outputs:
       ok: ${{ steps.check.outputs.ok }}
       config: ${{ steps.parse.outputs.config }}
+      version: ${{ steps.check.outputs.version }}
+      kind: ${{ steps.check.outputs.kind }}
       env: ${{ steps.check.outputs.env }}
       envs: ${{ steps.check.outputs.envs }}
       marlin_sha: ${{ steps.check.outputs.marlin_sha }}
@@ -60,6 +61,7 @@ jobs:
         env:
           CONFIG: ${{ steps.parse.outputs.config }}
           REQ_ENV: ${{ steps.parse.outputs.env }}
+          REQ_VERSION: ${{ steps.parse.outputs.version }}
           OWNER: ${{ github.repository_owner }}
         run: |
           reject() {
@@ -75,15 +77,24 @@ jobs:
             (( N > DAILY_LIMIT )) && reject "Sorry, there's a limit of $DAILY_LIMIT build requests per day. Please try again tomorrow."
           fi
 
+          # Marlin version: bugfix-2.1.x or a latest-* release, and its Configurations ref
+          PICKER="https://${OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/"
+          RES=$(python3 tools/marlin_versions.py resolve "$REQ_VERSION" 2>&1) \
+            || reject "Sorry, $RES Pick one in the [configuration picker]($PICKER)."
+          MARLIN_REF=$(sed -n 's/^marlin_ref=//p' <<<"$RES")
+          CONFIGS_REF=$(sed -n 's/^configs_ref=//p' <<<"$RES")
+          VERSION=$(sed -n 's/^label=//p' <<<"$RES")
+          KIND=$(sed -n 's/^kind=//p' <<<"$RES")
+
           # Fetch just enough of both repos to validate the request
-          git clone -q --depth 1 --filter=blob:none --sparse -b "$BRANCH" "https://github.com/$MARLIN_REPO" _marlin
+          git -c advice.detachedHead=false clone -q --depth 1 --filter=blob:none --sparse -b "$MARLIN_REF" "https://github.com/$MARLIN_REPO" _marlin
           git -C _marlin sparse-checkout set Marlin/src/pins
-          git clone -q --depth 1 --filter=blob:none --sparse -b "$BRANCH" "https://github.com/$CONFIGS_REPO" _cfg
+          git -c advice.detachedHead=false clone -q --depth 1 --filter=blob:none --sparse -b "$CONFIGS_REF" "https://github.com/$CONFIGS_REPO" _cfg
           git -C _cfg sparse-checkout set --no-cone "/config/examples/$CONFIG/*"
 
           ENVS=$(python3 tools/marlin_index.py envs _marlin _cfg "$CONFIG" 2>&1) \
-            || reject "Sorry, \`$CONFIG\` isn't a configuration I can build: $ENVS"
-          [[ -n $ENVS ]] || reject "Sorry, the board used by \`$CONFIG\` has no build environment in Marlin $BRANCH."
+            || reject "Sorry, \`$CONFIG\` isn't a configuration I can build for Marlin $VERSION: $ENVS"
+          [[ -n $ENVS ]] || reject "Sorry, the board used by \`$CONFIG\` has no build environment in Marlin $VERSION."
 
           ENV=${REQ_ENV:-$(head -n1 <<<"$ENVS")}
           grep -qx -- "$ENV" <<<"$ENVS" \
@@ -99,6 +110,8 @@ jobs:
 
           {
             echo "ok=true"
+            echo "version=$VERSION"
+            echo "kind=$KIND"
             echo "env=$ENV"
             echo "envs=$(echo $ENVS)"
             echo "marlin_sha=$MARLIN_SHA"
@@ -107,7 +120,7 @@ jobs:
             echo "cached=$CACHED"
           } >> "$GITHUB_OUTPUT"
 
-          [[ $CACHED == true ]] || gh issue comment "$ISSUE" --body "Building \`$CONFIG\` for \`$ENV\` from Marlin $BRANCH (\`${MARLIN_SHA:0:10}\`). This usually takes a few minutes. [Watch the build]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+          [[ $CACHED == true ]] || gh issue comment "$ISSUE" --body "Building \`$CONFIG\` for \`$ENV\` from Marlin $VERSION (\`${MARLIN_SHA:0:10}\`). This usually takes a few minutes. [Watch the build]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
 
   build:
     needs: prepare
@@ -120,6 +133,8 @@ jobs:
       CONFIG: ${{ needs.prepare.outputs.config }}
       PIO_ENV: ${{ needs.prepare.outputs.env }}
       KEY: ${{ needs.prepare.outputs.key }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      KIND: ${{ needs.prepare.outputs.kind }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -174,18 +189,25 @@ jobs:
           cat > out/BUILD_INFO.txt <<EOF
           Configuration: $CONFIG
           Environment:   $PIO_ENV
-          Marlin:        https://github.com/$MARLIN_REPO/commit/${{ needs.prepare.outputs.marlin_sha }}
+          Marlin:        $VERSION, https://github.com/$MARLIN_REPO/commit/${{ needs.prepare.outputs.marlin_sha }}
           Configurations: https://github.com/$CONFIGS_REPO/tree/${{ needs.prepare.outputs.configs_sha }}/config/examples/${CONFIG// /%20}
           Built:         $(date -u +'%Y-%m-%d %H:%M UTC')
 
           Copy the firmware file to the printer's SD card without renaming it
           (some boards only accept a specific file name). The config/ folder
           holds the configuration files this firmware was built from.
-
-          bugfix-2.1.x has the latest fixes, but recent changes can introduce
-          new bugs. If you find one, please report it to the Marlin project
-          with the details in this file.
           EOF
+          if [[ $KIND == bugfix ]]; then
+            printf '\n%s\n' \
+              "bugfix-2.1.x has the latest fixes, but recent changes can introduce" \
+              "new bugs. If you find one, please report it to the Marlin project" \
+              "with the details in this file." >> out/BUILD_INFO.txt
+          else
+            printf '\n%s\n' \
+              "Marlin $VERSION is a release. It doesn't have the fixes made since it" \
+              "came out. Before reporting a bug, check that it also happens with" \
+              "bugfix-2.1.x." >> out/BUILD_INFO.txt
+          fi
           (cd out && zip -r "../build-$KEY.zip" .)
 
       - uses: actions/upload-artifact@v7
@@ -216,6 +238,8 @@ jobs:
       CONFIG: ${{ needs.prepare.outputs.config }}
       PIO_ENV: ${{ needs.prepare.outputs.env }}
       ENVS: ${{ needs.prepare.outputs.envs }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      KIND: ${{ needs.prepare.outputs.kind }}
       KEY: ${{ needs.prepare.outputs.key }}
       CACHED: ${{ needs.prepare.outputs.cached }}
       BUILD_RESULT: ${{ needs.build.result }}
@@ -245,12 +269,16 @@ jobs:
               echo
               echo "**[Download $ASSET]($URL)**"
               echo
-              echo "Configuration \`$CONFIG\`, environment \`$PIO_ENV\`."
+              echo "Marlin \`$VERSION\`, configuration \`$CONFIG\`, environment \`$PIO_ENV\`."
               echo "The zip holds the firmware file(s), the configuration used and \`BUILD_INFO.txt\`."
               echo "Copy the firmware file to the SD card **without renaming it**."
               [[ -n $OTHERS ]] && echo && echo "If this doesn't boot on your board, try another environment: $OTHERS"
               echo
-              echo "> bugfix-2.1.x has the latest fixes, but recent changes can introduce new bugs. This download expires after about two weeks."
+              if [[ $KIND == bugfix ]]; then
+                echo "> bugfix-2.1.x has the latest fixes, but recent changes can introduce new bugs. This download expires after about two weeks."
+              else
+                echo "> Marlin $VERSION is a release and doesn't have the fixes made since. This download expires after about two weeks."
+              fi
             } > reply.md
             gh issue comment "$ISSUE" --body-file reply.md
             gh issue close "$ISSUE" --reason completed
@@ -258,7 +286,11 @@ jobs:
             {
               echo "### :x: Build failed"
               echo
-              echo "\`$CONFIG\` did not compile for \`$PIO_ENV\` on today's bugfix-2.1.x."
+              if [[ $KIND == bugfix ]]; then
+                echo "\`$CONFIG\` did not compile for \`$PIO_ENV\` on today's bugfix-2.1.x."
+              else
+                echo "\`$CONFIG\` did not compile for \`$PIO_ENV\` with Marlin $VERSION."
+              fi
               echo "This is usually a problem in Marlin or the example configuration, not something you did."
               echo
               if [[ -f build.log ]]; then
