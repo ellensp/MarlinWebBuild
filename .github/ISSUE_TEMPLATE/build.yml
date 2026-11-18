@@ -1,5 +1,5 @@
 name: Firmware build request
-description: Build Marlin bugfix-2.1.x firmware from an example configuration
+description: Build Marlin firmware from an example configuration
 title: "Build: "
 labels: [build-request]
 body:
@@ -8,6 +8,11 @@ body:
       value: |
         The easiest way to fill this in is from the [configuration picker](https://ellensp.github.io/MarlinWebBuild/).
         A bot will reply here with a download link in a few minutes.
+  - type: input
+    id: version
+    attributes:
+      label: Marlin version
+      description: "`bugfix-2.1.x`, or a release from the picker, e.g. `2.1.2.9`. Leave blank for `bugfix-2.1.x`."
   - type: input
     id: config
     attributes:
@@ -25,5 +30,5 @@ body:
     attributes:
       label: Acknowledgement
       options:
-        - label: I understand bugfix-2.1.x is updated daily, so it has the latest fixes but may also contain recently introduced bugs.
+        - label: I understand bugfix-2.1.x is updated daily, so it has the latest fixes but may also contain recently introduced bugs, and that a release doesn't have the fixes made since it came out.
           required: true
