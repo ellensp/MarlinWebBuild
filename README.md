@@ -1,3 +1,12 @@
+> [!WARNING]
+> **ARCHIVED — NO LONGER MAINTAINED**
+>
+> This repository was originally created as a demonstration of MarlinWebBuild.
+> Development has continued in a fork, which is now the actively maintained version.
+>
+> - **To build firmware:** use <https://marlinfirmware.github.io/MarlinWebBuild/>
+> - **For development, issues and pull requests:** go to <https://github.com/MarlinFirmware/MarlinWebBuild>
+
 # Marlin Firmware Builder
 
 Build firmware from the [Marlin](https://github.com/MarlinFirmware/Marlin) **`bugfix-2.1.x`** branch
